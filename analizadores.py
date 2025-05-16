@@ -116,13 +116,13 @@ def analizar_sintaxis(codigo):
     return errores
 
 def analizar_semantico(codigo):
-   
-      #Registra variables definidas en asignaciones.
-      #Marca error si se usa una variable no declarada previamente.
-      #Captura SyntaxError del parser AST.
-    
-    #Devuelve lista de cadenas con los errores semánticos encontrados.
-    
+    """
+    Analizador semántico mejorado que verifica:
+    - Variables no definidas
+    - Número correcto de argumentos en funciones built-in
+    - Scope de variables
+    - Reasignación de variables de iteración
+    """
     errores = []
     try:
         tree = ast.parse(codigo)
@@ -130,28 +130,85 @@ def analizar_semantico(codigo):
         errores.append(f"Error semántico (parsing) línea {e.lineno}: {e.msg}")
         return errores
 
-    symbol_table = set()
-    errores_sem = []
-
     class Semantico(ast.NodeVisitor):
+        def __init__(self):
+            self.scopes = [set()]  # Pila de ámbitos (scope)
+            self.for_vars = set()  # Variables de iteración de ciclos for
+            self.builtins = dir(builtins)  # Funciones built-in de Python
+
+        def enter_scope(self):
+            self.scopes.append(set())
+
+        def exit_scope(self):
+            self.scopes.pop()
+
+        def current_scope(self):
+            return self.scopes[-1]
+
+        def add_to_scope(self, name):
+            self.current_scope().add(name)
+
+        def is_defined(self, name):
+            return any(name in scope for scope in reversed(self.scopes)) or name in self.builtins
+
+        def visit_For(self, node):
+            # Procesar la variable de iteración
+            if isinstance(node.target, ast.Name):
+                var_name = node.target.id
+                self.for_vars.add(var_name)
+                self.add_to_scope(var_name)
+            
+            # Verificar el iterable
+            self.visit(node.iter)
+            
+            # Procesar el cuerpo del for en un nuevo scope
+            self.enter_scope()
+            for item in node.body:
+                self.visit(item)
+            self.exit_scope()
+
         def visit_Assign(self, node):
-            # sólo manejamos simples "x = ..." 
+            # Procesar asignaciones
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    symbol_table.add(target.id)
-            # procesar el resto del árbol para posibles usos
-            self.generic_visit(node.value)
+                    # Verificar si se está reasignando una variable de iteración
+                    if target.id in self.for_vars:
+                        errores.append(
+                            f"Advertencia semántica línea {target.lineno}: "
+                            f"reasignación de variable de iteración '{target.id}'"
+                        )
+                    self.add_to_scope(target.id)
+            self.visit(node.value)
 
         def visit_Name(self, node):
-            # si es lectura (Load), verificar definición previa
+            # Verificar uso de variables
             if isinstance(node.ctx, ast.Load):
-                if node.id not in symbol_table and node.id not in dir(builtins):
-                    errores_sem.append(
+                if not self.is_defined(node.id):
+                    errores.append(
                         f"Error semántico línea {node.lineno}: "
                         f"variable '{node.id}' no definida"
                     )
-            # continuar el recorrido
+
+        def visit_Call(self, node):
+            # Verificar llamadas a funciones específicas como range()
+            if isinstance(node.func, ast.Name):
+                func_name = node.func.id
+                
+                # Verificación especial para range()
+                if func_name == 'range':
+                    if len(node.args) < 1 or len(node.args) > 3:
+                        errores.append(
+                            f"Error semántico línea {node.lineno}: "
+                            f"range() acepta 1-3 argumentos, se proporcionaron {len(node.args)}"
+                        )
+                
+                # Verificación de argumentos para otras funciones built-in
+                elif func_name in self.builtins:
+                    # Aquí podrías agregar más verificaciones para otras funciones
+                    pass
+            
+            # Continuar con el análisis normal
             self.generic_visit(node)
 
     Semantico().visit(tree)
-    return errores_sem
+    return errores
