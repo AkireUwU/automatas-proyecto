@@ -1,7 +1,7 @@
 # ANALIZADOR LEXICO
 # se hara uso de expresiones regulares para la
 # identificacion de tokens
-
+#nota nueva ajsdjasd
 import re
 import ast
 import builtins
